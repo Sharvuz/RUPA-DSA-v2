@@ -146,10 +146,15 @@ class CLIP_Adapter(nn.Module):
 
 class SGNM(nn.Module):
     def __init__(self, feature_dim=512, num_prototypes=64, num_heads=8,
-                 extractor_depth=1, decoder_depth=8, normal_selection_ratio=0.125):
+                 extractor_depth=1, decoder_depth=8, normal_selection_ratio=0.125,
+                 adaptive_normal_selection=True, min_normal_frames=4,
+                 max_normal_ratio=0.8):
         super().__init__()
 
         self.normal_selection_ratio = normal_selection_ratio
+        self.adaptive_normal_selection = adaptive_normal_selection
+        self.min_normal_frames = min_normal_frames
+        self.max_normal_ratio = max_normal_ratio
         self.video_prototypes = nn.Parameter(torch.randn(num_prototypes, feature_dim))
         self.dnp_extractor = nn.ModuleList([
             Aggregation_Block(
@@ -171,6 +176,63 @@ class SGNM(nn.Module):
             ) for _ in range(decoder_depth)
         ])
 
+    @staticmethod
+    def otsu_threshold_1d(scores):
+        """Compute Otsu's optimal threshold on a 1-D tensor of anomaly scores.
+
+        The algorithm finds the threshold t in [min, max] that maximises the
+        inter-class variance σ²_B(t) = w0 * w1 * (μ0 − μ1)², effectively
+        splitting the score distribution into *normal* (< t) and *anomaly*
+        (>= t) groups.
+
+        Args:
+            scores: 1-D float tensor of anomaly scores (already valid, no inf).
+
+        Returns:
+            threshold (float): the optimal cut-off value.
+        """
+        sorted_scores, _ = scores.sort()
+        n = sorted_scores.numel()
+        if n <= 1:
+            return float(sorted_scores[0].item()) + 1e-6
+
+        # Use 256 candidate thresholds uniformly spanning the score range
+        # (or fewer when the number of unique values is small).
+        num_bins = min(256, n)
+        s_min = sorted_scores[0].item()
+        s_max = sorted_scores[-1].item()
+        if s_max - s_min < 1e-8:
+            # All scores are (nearly) identical — treat all as normal.
+            return s_max + 1e-6
+
+        thresholds = torch.linspace(s_min, s_max, num_bins + 2,
+                                    device=scores.device)[1:-1]  # exclude endpoints
+
+        # Vectorised Otsu: for each candidate threshold compute inter-class variance.
+        # scores is 1-D, thresholds is 1-D; compare via broadcasting.
+        mask = sorted_scores.unsqueeze(0) < thresholds.unsqueeze(1)  # [T, N]
+
+        w0 = mask.sum(dim=1).float()          # count of "normal" class
+        w1 = n - w0                            # count of "anomaly" class
+
+        # Avoid division-by-zero for degenerate splits
+        valid = (w0 > 0) & (w1 > 0)
+        if not valid.any():
+            return (s_min + s_max) / 2.0
+
+        sum_all = sorted_scores.sum()
+        # cumulative sum trick: sum of scores < threshold
+        cum_sum = (sorted_scores.unsqueeze(0) * mask.float()).sum(dim=1)
+
+        mean0 = cum_sum / w0.clamp(min=1)
+        mean1 = (sum_all - cum_sum) / w1.clamp(min=1)
+
+        sigma_b = w0 * w1 * (mean0 - mean1) ** 2  # inter-class variance
+
+        sigma_b = sigma_b.masked_fill(~valid, -1.0)
+        best_idx = sigma_b.argmax()
+        return thresholds[best_idx].item()
+
     def gather_loss(self, query, keys, reliability=None):
         distribution = 1. - F.cosine_similarity(query.unsqueeze(2), keys.unsqueeze(1), dim=-1)
         distance, _ = torch.min(distribution, dim=2)
@@ -181,30 +243,108 @@ class SGNM(nn.Module):
             gather_loss = (distance * reliability).sum(dim=1).mean()
         return gather_loss
 
+    def _select_normal_frames_fixed(self, anomaly_scores, visual_features, lengths, B, N, D):
+        """Original fixed-ratio normal frame selection (fallback)."""
+        if lengths is not None:
+            lengths_clamped = lengths.to(device=visual_features.device, dtype=torch.long).clamp(min=1, max=N)
+            valid_mask = torch.arange(N, device=visual_features.device)[None, :] < lengths_clamped[:, None]
+            scores = anomaly_scores.masked_fill(~valid_mask, float('inf'))
+            min_valid_length = int(lengths_clamped.min().item())
+        else:
+            scores = anomaly_scores
+            min_valid_length = N
+
+        num_normal_frames = max(1, min(int(N * self.normal_selection_ratio), min_valid_length))
+        _, indices = torch.topk(scores, k=num_normal_frames, largest=False, dim=1)
+        normal_indices = indices[:, :num_normal_frames]
+
+        selected_normal_features = torch.gather(
+            visual_features, 1,
+            normal_indices.unsqueeze(-1).expand(-1, -1, D)
+        )
+        selected_scores = torch.gather(scores, 1, normal_indices)
+        reliability = (1.0 - selected_scores).clamp(min=1e-4, max=1.0)
+        return selected_normal_features, reliability
+
+    def _select_normal_frames_adaptive(self, anomaly_scores, visual_features, lengths, B, N, D):
+        """Adaptive normal frame selection using Otsu's thresholding per video."""
+        device = visual_features.device
+
+        if lengths is not None:
+            lengths_clamped = lengths.to(device=device, dtype=torch.long).clamp(min=1, max=N)
+            valid_mask = torch.arange(N, device=device)[None, :] < lengths_clamped[:, None]
+        else:
+            lengths_clamped = torch.full((B,), N, device=device, dtype=torch.long)
+            valid_mask = torch.ones(B, N, device=device, dtype=torch.bool)
+
+        # --- Per-video Otsu thresholding ---
+        per_video_counts = []
+        normal_mask = torch.zeros(B, N, device=device, dtype=torch.bool)
+
+        for i in range(B):
+            L_i = int(lengths_clamped[i].item())
+            valid_scores_i = anomaly_scores[i, :L_i]
+
+            threshold_i = self.otsu_threshold_1d(valid_scores_i)
+
+            # Mark frames below threshold as normal
+            frame_normal = anomaly_scores[i, :L_i] < threshold_i
+
+            count_i = int(frame_normal.sum().item())
+
+            # Apply safety bounds
+            min_k = min(self.min_normal_frames, L_i)
+            max_k = max(min_k, int(self.max_normal_ratio * L_i))
+            count_i = max(min_k, min(count_i, max_k))
+
+            # If Otsu selected too few or too many, fall back to topk
+            if int(frame_normal.sum().item()) < min_k or int(frame_normal.sum().item()) > max_k:
+                _, topk_idx = torch.topk(anomaly_scores[i, :L_i], k=count_i, largest=False)
+                normal_mask[i, :L_i] = False
+                normal_mask[i, topk_idx] = True
+            else:
+                # Take exactly count_i frames with lowest scores among normal-flagged ones
+                scores_masked = anomaly_scores[i].clone()
+                scores_masked[~frame_normal.new_zeros(N, dtype=torch.bool).scatter_(0, torch.arange(L_i, device=device)[frame_normal], True)] = float('inf')
+                _, topk_idx = torch.topk(scores_masked, k=count_i, largest=False)
+                normal_mask[i] = False
+                normal_mask[i, topk_idx] = True
+
+            per_video_counts.append(count_i)
+
+        # --- Pad selected features into batched tensor ---
+        max_count = max(per_video_counts)
+        selected_normal_features = torch.zeros(B, max_count, D, device=device, dtype=visual_features.dtype)
+        selected_scores = torch.ones(B, max_count, device=device)  # default 1.0 → reliability ~0
+        selection_mask = torch.zeros(B, max_count, device=device, dtype=torch.bool)
+
+        for i in range(B):
+            idx_i = normal_mask[i].nonzero(as_tuple=False).squeeze(-1)
+            k_i = per_video_counts[i]
+            selected_normal_features[i, :k_i] = visual_features[i, idx_i[:k_i]]
+            selected_scores[i, :k_i] = anomaly_scores[i, idx_i[:k_i]]
+            selection_mask[i, :k_i] = True
+
+        reliability = (1.0 - selected_scores).clamp(min=1e-4, max=1.0)
+        # Zero-out reliability for padded positions
+        reliability = reliability * selection_mask.float()
+
+        return selected_normal_features, reliability
+
     def forward(self, visual_features, logits1, lengths=None, normal_selection_ratio=0.125):
-        normal_selection_ratio = self.normal_selection_ratio
         B, N, D = visual_features.shape
 
         with torch.no_grad():
             anomaly_scores = torch.sigmoid(logits1.squeeze(-1))
-            if lengths is not None:
-                lengths = lengths.to(device=visual_features.device, dtype=torch.long).clamp(min=1, max=N)
-                valid_mask = torch.arange(N, device=visual_features.device)[None, :] < lengths[:, None]
-                anomaly_scores = anomaly_scores.masked_fill(~valid_mask, float('inf'))
-                min_valid_length = int(lengths.min().item())
+
+            if self.adaptive_normal_selection:
+                selected_normal_features, reliability = self._select_normal_frames_adaptive(
+                    anomaly_scores, visual_features, lengths, B, N, D
+                )
             else:
-                min_valid_length = N
-
-            num_normal_frames = max(1, min(int(N * normal_selection_ratio), min_valid_length))
-            _, indices = torch.topk(anomaly_scores, k=num_normal_frames, largest=False, dim=1)
-            normal_indices = indices[:, :num_normal_frames]
-
-            selected_normal_features = torch.gather(
-                visual_features, 1,
-                normal_indices.unsqueeze(-1).expand(-1, -1, D)
-            )
-            selected_scores = torch.gather(anomaly_scores, 1, normal_indices)
-            reliability = (1.0 - selected_scores).clamp(min=1e-4, max=1.0)
+                selected_normal_features, reliability = self._select_normal_frames_fixed(
+                    anomaly_scores, visual_features, lengths, B, N, D
+                )
 
         # Reliability only modulates the normal evidence. The prototypes remain
         # video-specific because every global seed is conditioned on this video's
@@ -308,7 +448,10 @@ class DSANet(nn.Module):
             num_heads=8,
             extractor_depth=1,
             decoder_depth=args.decoder_depth,
-            normal_selection_ratio=args.normal_selection_ratio
+            normal_selection_ratio=args.normal_selection_ratio,
+            adaptive_normal_selection=getattr(args, 'adaptive_normal_selection', True),
+            min_normal_frames=getattr(args, 'min_normal_frames', 4),
+            max_normal_ratio=getattr(args, 'max_normal_ratio', 0.8),
         )
 
         self._text_features_cache = None

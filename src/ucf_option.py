@@ -46,6 +46,14 @@ parser.add_argument('--normal_selection_ratio', type=float, default=0.8)
 parser.add_argument('--num_prototypes', type=int, default=16)
 parser.add_argument('--DNP_use', default=True, type=str2bool)
 
+# Adaptive Normal Selection (Improvement 2)
+parser.add_argument('--adaptive_normal_selection', default=True, type=str2bool,
+                    help='Use Otsu thresholding for dynamic normal frame selection')
+parser.add_argument('--min_normal_frames', type=int, default=4,
+                    help='Minimum number of normal frames to select per video')
+parser.add_argument('--max_normal_ratio', type=float, default=0.8,
+                    help='Maximum ratio of frames that can be selected as normal')
+
 #Adapter
 parser.add_argument('--text_adapt_until', default=3, type=int)
 parser.add_argument('--t_w', default=0.1, type=float)
