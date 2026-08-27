@@ -31,7 +31,7 @@ flowchart TD
     V[Video] --> F[CLIP Vision Encoder]
     F --> X[Video Features X]
     
-    T[Text Prompts\n'Normal' / 'Abnormal'] --> CLIP_T[CLIP Text Encoder]
+    T["Text Prompts\n'Normal' / 'Abnormal'"] --> CLIP_T[CLIP Text Encoder]
     CLIP_T --> T_Feat[Text Features]
 
     %% Branch 1: Base Detector
@@ -40,7 +40,7 @@ flowchart TD
     S_det --> L_MIL[Loss 1: MIL Classification]
 
     %% Branch 2: Adaptive Selection & Reconstruction
-    S_det --> Otsu{Adaptive Normal Selection\n(Otsu Thresholding)}
+    S_det --> Otsu{"Adaptive Normal Selection\n(Otsu Thresholding)"}
     X --> Otsu
     Otsu -->|Selects| X_norm[Normal Frames X_norm]
     
@@ -59,7 +59,7 @@ flowchart TD
     S_sem --> L_Res[Loss 4: Residual Event]
 
     %% Final Routing
-    S_det --> Router((Closed-Loop\nRouting))
+    S_det --> Router(("Closed-Loop\nRouting"))
     F_rec --> Router
     S_sem --> Router
     Router --> S_final[Final Anomaly Scores]
