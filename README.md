@@ -1,96 +1,125 @@
-# RUPA-DSA v0
+# RUPA-DSA v2
 
-**Video-specific counterfactual normal reconstruction with category-aware residual semantic alignment for weakly supervised video anomaly detection.**
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)
+![PyTorch](https://img.shields.io/badge/PyTorch-1.10%2B-ee4c2c.svg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-RUPA-DSA v0 extends [DSANet](https://github.com/lessiYin/DSANet) with counterfactual reconstruction, residual semantic alignment, and fixed closed-loop routing:
+**Video-specific counterfactual normal reconstruction with adaptive normal selection and baseline-preserving risk gates for weakly supervised video anomaly detection.**
+
+RUPA-DSA v2 represents a major evolution of the RUPA-DSA architecture (extending [DSANet](https://github.com/lessiYin/DSANet)). Building upon the residual semantic alignment introduced in v0, this version solves the "fixed normal ratio contamination" problem by introducing **Adaptive Normal Selection via Otsu's Thresholding**, along with a **Baseline-Preserving Risk Gate** (introduced in v1) to stabilize early-stage training.
+
+---
+
+## 🚀 Key Contributions (v2 Architecture)
+
+RUPA-DSA v2 tackles the limitations of fixed parameterizations in earlier versions with three core pillars:
+
+1. **Adaptive Normal Selection (v2 Core Update):**
+   Previous versions (and traditional MIL approaches) assumed a fixed ratio of normal frames (e.g., 12.5% or 80%). This caused feature contamination in videos that were overwhelmingly anomalous. v2 utilizes **Otsu's Thresholding** on 1D anomaly scores (`S_det`) to dynamically and adaptively determine the threshold for normal frames per-video. 
+   ```text
+   anomaly_scores = sigmoid(logits_det)
+   threshold = otsu_threshold(valid_scores)
+   normal_frames = frames[anomaly_scores < threshold]  --> Extract DNP
+   ```
+
+2. **Baseline-Preserving Risk Gate (from v1):**
+   Instead of a static score fusion which could degrade the performance of a warm-started pre-trained detector, v2 uses a per-snippet risk gate $g(video)$ initialized near zero:
+   ```text
+   S_fixed = w_det * S_det + w_rec * S_rec + w_sem * S_sem
+   S_safe  = S_det + g(video) * (S_fixed - S_det)
+   ```
+   This ensures RUPA-DSA safely explores residual adjustments without collapsing the baseline accuracy.
+
+3. **Counterfactual Reconstruction & Residual Learning (from v0):**
+   Extracts Dynamic Normal Patterns (DNPs) to reconstruct the normal feature space ($F_{rec}$) and isolates anomalies using residual learning ($R = F_{video} - F_{rec}$) for accurate semantic alignment.
+
+---
+
+## 📂 Repository Structure
 
 ```text
-F_video --video-specific DNP--> F_rec
-R = F_video - F_rec
-
-F_rec + DNP <--> normal text
-R             <--> anomaly-category text
-
-S* = w_det S_det + w_rec S_rec + w_sem S_sem
-```
-
-The narrow research contribution is the structured combination of video-specific normal reconstruction and category-aware residual–text alignment. This repository does not claim that prototypes, reconstruction error, residual learning, or CLIP alignment are individually new.
-
-## Repository structure
-
-```text
-RUPA-DSA-v0/
-├── RUPA_DSA_Kaggle.ipynb   # Kaggle runner; clones this repository directly
-├── RUPA_DSA.md              # method and ablation protocol
-├── environment.yml
-├── requirements.txt
-├── assets/
+RUPA-DSA-v2/
+├── RUPA_DSA_Kaggle.ipynb    # One-click Kaggle training runner
+├── RUPA_DSA.md              # Detailed method and ablation protocol
+├── implementation_plan.md   # Architectural documentation of v2 Adaptive Selection
+├── environment.yml          # Conda environment specifications
+├── requirements.txt         # Pip requirements
+├── assets/                  # Images and diagrams
 ├── list/                    # CSV manifests and evaluation annotations
 └── src/
-    ├── model.py             # RUPA reconstruction/residual/routing
-    ├── ucf_train.py
-    ├── ucf_test.py
-    ├── xd_train.py
-    ├── xd_test.py
-    ├── clip/
+    ├── model.py             # RUPA v2 architecture (Otsu thresholding, Risk Gate)
+    ├── ucf_train.py / ucf_test.py
+    ├── xd_train.py / xd_test.py
+    ├── clip/                # CLIP ViT-B/16 modules
     └── utils/
 ```
 
-Feature archives, checkpoints, and outputs are intentionally excluded by `.gitignore`.
+---
 
-## Train on Kaggle
+## ☁️ Train on Kaggle
 
-1. Import `RUPA_DSA_Kaggle.ipynb` into Kaggle.
-2. Enable **GPU** and **Internet**.
-3. For UCF-Crime, attach `UCFClipFeatures.zip` and set `DATASET = "ucf"`.
-4. For XD-Violence, attach `XDTrainClipFeatures.zip` plus `XDTestClipFeatures.zip` and set `DATASET = "xd"`.
-5. Run all cells.
-6. Download `RUPA_DSA_v0_<dataset>_results.zip` from `/kaggle/working/rupa_v0_artifacts`.
+The fastest way to reproduce results is via Kaggle using the provided notebook:
 
-The notebook executes:
+1. Import `RUPA_DSA_Kaggle.ipynb` into your Kaggle workspace.
+2. Enable **GPU** (T4/P100) and **Internet** access.
+3. **For UCF-Crime:** Attach the `UCFClipFeatures.zip` dataset and set `DATASET = "ucf"`.
+4. **For XD-Violence:** Attach `XDTrainClipFeatures.zip` and `XDTestClipFeatures.zip`, then set `DATASET = "xd"`.
+5. Run all cells. 
+6. Retrieve your results and weights from `/kaggle/working/rupa_v2_artifacts/`.
 
-```bash
-git clone --depth 1 https://github.com/Sharvuz/RUPA-DSA-v0.git
-```
+---
 
-There is no embedded/base64 source overlay. Every Kaggle run therefore uses the current code on GitHub, or the optional `REPO_REF` commit/tag configured in the notebook.
+## 💻 Local Installation
 
-## Local environment
+To run the repository on your local workstation:
 
+**Using Conda:**
 ```bash
 conda env create -f environment.yml
 conda activate rupa-dsa
 ```
 
-Alternatively, install a CUDA-compatible PyTorch build first and then run:
-
+**Using Pip:**
+Ensure you have a CUDA-compatible PyTorch build installed, then run:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Direct CLI training
+---
 
-Update the feature paths in the CSV manifests or pass mapped CSV files explicitly:
+## 🏃 Direct CLI Training
 
+To train the model locally, configure your CSV manifests in `list/` and utilize the new v2 arguments (`--adaptive_normal_selection`).
+
+**Train on UCF-Crime:**
 ```bash
 python src/ucf_train.py \
   --train-list list/ucf_CLIP_rgb.csv \
   --test-list list/ucf_CLIP_rgbtest.csv \
   --model-path model/best_ucf.pth \
-  --checkpoint-path model/checkpoint_ucf.pth
+  --checkpoint-path model/checkpoint_ucf.pth \
+  --adaptive_normal_selection True \
+  --min_normal_frames 4 \
+  --max_normal_ratio 0.8
+```
 
+**Train on XD-Violence:**
+```bash
 python src/xd_train.py \
   --train-list list/xd_CLIP_rgb.csv \
   --test-list list/xd_CLIP_rgbtest.csv \
   --model-path model/best_xd.pth \
-  --checkpoint-path model/checkpoint_xd.pth
+  --checkpoint-path model/checkpoint_xd.pth \
+  --adaptive_normal_selection True
 ```
 
-All RUPA routing and loss weights are exposed in `src/ucf_option.py` and `src/xd_option.py`. See [RUPA_DSA.md](RUPA_DSA.md) for the recommended ablations.
+*Fallback:* To reproduce v1/v0 behavior with a fixed ratio, simply pass `--adaptive_normal_selection False`.
 
-## Attribution
+---
 
-This codebase is derived from the official DSANet implementation:
+## 📜 Attribution & Acknowledgments
+
+This codebase is a heavily modified evolution of the official **DSANet** implementation. If you use this code in your research, please cite the original AAAI 2026 paper:
 
 ```bibtex
 @inproceedings{yin2026learning,
@@ -100,101 +129,3 @@ This codebase is derived from the official DSANet implementation:
   year={2026}
 }
 ```
-
-Cải tiên v2. # Cải tiến 2: Adaptive Normal Selection (Lựa chọn khung hình bình thường động)
-
-## Bối cảnh
-
-Trong SGNM (Self-Guided Normality Modeling), số khung hình được chọn làm "bình thường" hiện bị cố định bởi `normal_selection_ratio` (mặc định 0.125 hoặc 0.8). Khi video chứa sự kiện bất thường chiếm phần lớn thời lượng, tỷ lệ cố định có thể lấy nhầm khung hình bất thường vào bộ đặc trưng bình thường (contamination).
-
-**Giải pháp**: Thay vì cố định tỷ lệ, sử dụng thuật toán **Otsu's thresholding** trên phổ điểm số anomaly `S_det = sigmoid(logits1)` để tự động xác định ngưỡng cắt cho từng video. Các frame có `anomaly_score < threshold_otsu` sẽ được coi là "bình thường". Nếu video quá bất thường, rất ít frame sẽ được chọn.
-
-## Proposed Changes
-
-### SGNM Module — Adaptive Normal Selection
-
-#### [MODIFY] [model.py](file:///c:/Users/huynh/Downloads/dsanet/RUPA-DSAv2/src/model.py)
-
-Thay đổi chính trong class `SGNM`:
-
-1. **Thêm hàm `otsu_threshold_1d`**: Hàm tĩnh thực hiện Otsu's method trên 1D tensor (phổ anomaly scores) để tìm ngưỡng tối ưu phân tách 2 nhóm (normal vs anomaly).
-
-2. **Thêm tham số `adaptive_normal_selection`** vào `__init__`: Bool flag cho phép bật/tắt tính năng này. Khi `True`, dùng Otsu; khi `False`, fallback về `normal_selection_ratio` cố định (backward compatible).
-
-3. **Thêm tham số `min_normal_frames`** và **`max_normal_ratio`**: Giới hạn an toàn:
-   - `min_normal_frames`: Tối thiểu luôn lấy ít nhất N frame (mặc định 4) để tránh trường hợp Otsu chọn 0 frame.
-   - `max_normal_ratio`: Tỷ lệ tối đa frame được chọn (mặc định 0.8) để tránh lấy quá nhiều frame khi video hoàn toàn bình thường.
-
-4. **Sửa logic trong `forward()`**: Thay thế dòng tính `num_normal_frames` cố định bằng logic adaptive:
-   - Với mỗi video trong batch, tính Otsu threshold trên anomaly scores hợp lệ
-   - Đếm số frame có score < threshold → đó là `num_normal_frames` cho video đó
-   - Áp dụng giới hạn `min_normal_frames` và `max_normal_ratio`
-   - Vì mỗi video trong batch có thể có số frame normal khác nhau, sử dụng **padding + mask** để xử lý batched tensor
-
-Cụ thể, flow mới:
-
-```
-anomaly_scores = sigmoid(logits1)  # [B, N]
-for each video i in batch:
-    valid_scores = anomaly_scores[i, :lengths[i]]
-    threshold = otsu_threshold_1d(valid_scores)
-    normal_mask[i] = (anomaly_scores[i] < threshold) & valid_mask[i]
-    # clamp to [min_normal_frames, max_normal_ratio * lengths[i]]
-```
-
-> [!IMPORTANT]
-> **Xử lý batch**: Vì mỗi video có số frame normal khác nhau, ta cần chuyển sang logic sử dụng mask thay vì `torch.topk` với k cố định. Cụ thể:
->
-> - Dùng mask để zero-out các frame không được chọn
-> - Weighted average thay vì gather + fixed-k
-
----
-
-### Option Files — Thêm hyperparameters
-
-#### [MODIFY] [ucf_option.py](file:///c:/Users/huynh/Downloads/dsanet/RUPA-DSAv2/src/ucf_option.py)
-
-Thêm 3 tham số mới:
-
-- `--adaptive_normal_selection` (bool, default=True)
-- `--min_normal_frames` (int, default=4)
-- `--max_normal_ratio` (float, default=0.8)
-
-#### [MODIFY] [xd_option.py](file:///c:/Users/huynh/Downloads/dsanet/RUPA-DSAv2/src/xd_option.py)
-
-Thêm 3 tham số tương tự.
-
----
-
-### DSANet Constructor — Truyền tham số
-
-#### [MODIFY] [model.py](file:///c:/Users/huynh/Downloads/dsanet/RUPA-DSAv2/src/model.py) (DSANet class)
-
-Sửa phần khởi tạo `self.video_anomaly_refiner = SGNM(...)` để truyền thêm các tham số mới từ `args`.
-
-## Tóm tắt luồng hoạt động mới
-
-```mermaid
-flowchart TD
-    A["anomaly_scores = σ(logits1)"] --> B["Với mỗi video i"]
-    B --> C["Lấy valid_scores = scores[i, :length_i]"]
-    C --> D["Tính Otsu threshold trên valid_scores"]
-    D --> E{"score < threshold?"}
-    E -->|Yes| F["Frame = Normal ✓"]
-    E -->|No| G["Frame = Anomaly ✗"]
-    F --> H["Clamp: min_normal_frames ≤ count ≤ max_normal_ratio × length_i"]
-    H --> I["Selected normal features → DNP Extractor"]
-```
-
-## Verification Plan
-
-### Automated Tests
-
-- Chạy training UCF: `python src/ucf_trains.py --max-epoch 1 --adaptive_normal_selection True`
-- Chạy training UCF với fallback: `python src/ucf_train.py --max-epoch 1 --adaptive_normal_selection False`
-- Kiểm tra model khởi tạo thành công, forward pass không lỗi
-
-### Manual Verification
-
-- In ra thống kê số frame normal được chọn per-video qua mỗi batch để xác minh Otsu thay đổi động
-- So sánh training loss giữa adaptive vs fixed ratio
