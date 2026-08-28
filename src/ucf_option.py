@@ -73,3 +73,28 @@ parser.add_argument('--loss-dnp-normal-weight', default=0.1, type=float)
 parser.add_argument('--loss-consistency-weight', default=1.0, type=float)
 parser.add_argument('--loss-gather-weight', default=1.0, type=float)
 parser.add_argument('--num-workers', default=2, type=int)
+
+# === Improvement hyperparameters (v2.1) ===
+# LR scaling: scale LR by sqrt(batch_size / lr_scale_ref_bs)
+parser.add_argument('--lr-scale-ref-bs', default=0, type=int,
+                    help='Reference batch size for sqrt LR scaling. 0 = disabled.')
+# Gradient clipping
+parser.add_argument('--grad-clip', default=0.0, type=float,
+                    help='Max gradient norm for clipping. 0 = disabled.')
+# Early stopping
+parser.add_argument('--patience', default=0, type=int,
+                    help='Early stopping patience (epochs). 0 = disabled.')
+# EMA
+parser.add_argument('--ema-decay', default=0.0, type=float,
+                    help='EMA decay rate for model weights. 0 = disabled.')
+# Feature-level augmentation
+parser.add_argument('--feat-dropout', default=0.0, type=float,
+                    help='Feature-level dropout rate during training. 0 = disabled.')
+parser.add_argument('--feat-noise', default=0.0, type=float,
+                    help='Gaussian noise std for feature augmentation. 0 = disabled.')
+# Eval interval
+parser.add_argument('--eval-interval', default=1280, type=int,
+                    help='Steps between evaluations during training.')
+# Model dropout rate (for mlp1/mlp2)
+parser.add_argument('--mlp-dropout', default=0.1, type=float,
+                    help='Dropout rate for MLP layers in model.')

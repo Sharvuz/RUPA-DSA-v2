@@ -421,14 +421,17 @@ class DSANet(nn.Module):
         self.linear = nn.Linear(visual_width, visual_width)
         self.gelu = QuickGELU()
 
+        mlp_dropout = getattr(args, 'mlp_dropout', 0.1)
         self.mlp1 = nn.Sequential(OrderedDict([
             ("c_fc", nn.Linear(visual_width, visual_width * 4)),
             ("gelu", QuickGELU()),
+            ("dropout", nn.Dropout(mlp_dropout)),
             ("c_proj", nn.Linear(visual_width * 4, visual_width))
         ]))
         self.mlp2 = nn.Sequential(OrderedDict([
             ("c_fc", nn.Linear(visual_width, visual_width * 4)),
             ("gelu", QuickGELU()),
+            ("dropout", nn.Dropout(mlp_dropout)),
             ("c_proj", nn.Linear(visual_width * 4, visual_width))
         ]))
         self.classifier = nn.Linear(visual_width, 1)
@@ -472,13 +475,12 @@ class DSANet(nn.Module):
                 nn.init.constant_(m.weight, 1.0)
 
     def build_attention_mask(self, attn_window):
-        mask = torch.empty(self.visual_length, self.visual_length)
-        mask.fill_(float('-inf'))
+        mask = torch.ones(self.visual_length, self.visual_length, dtype=torch.bool)
         for i in range(int(self.visual_length / attn_window)):
             if (i + 1) * attn_window < self.visual_length:
-                mask[i * attn_window: (i + 1) * attn_window, i * attn_window: (i + 1) * attn_window] = 0
+                mask[i * attn_window: (i + 1) * attn_window, i * attn_window: (i + 1) * attn_window] = False
             else:
-                mask[i * attn_window: self.visual_length, i * attn_window: self.visual_length] = 0
+                mask[i * attn_window: self.visual_length, i * attn_window: self.visual_length] = False
 
         return mask
 

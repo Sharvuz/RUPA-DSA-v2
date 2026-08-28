@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import numpy as np
 import random
+import math
+import copy
 
 from model import DSANet
 from ucf_test import test
@@ -142,6 +144,37 @@ class ConsistencyLoss(nn.Module):
 
 consistency_loss_fn = ConsistencyLoss()
 
+class EMA:
+    """Exponential Moving Average of model parameters for stable evaluation."""
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {}
+        self.backup = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    def update(self, model):
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = (
+                    self.decay * self.shadow[name] + (1.0 - self.decay) * param.data
+                )
+
+    def apply_shadow(self, model):
+        """Replace model params with EMA shadow (for evaluation)."""
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.backup[name] = param.data.clone()
+                param.data.copy_(self.shadow[name])
+
+    def restore(self, model):
+        """Restore model params from backup (after evaluation)."""
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.backup:
+                param.data.copy_(self.backup[name])
+        self.backup = {}
+
 def train(model, normal_loader, anomaly_loader, testloader, args, label_map, device):
     model.to(device)
     os.makedirs(os.path.dirname(args.checkpoint_path) or '.', exist_ok=True)
@@ -159,32 +192,49 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
             refiner_params.append(param)
         else:
             main_model_params.append(param)
+
+    # === Improvement 1: LR sqrt scaling ===
+    effective_lr = args.lr
+    if args.lr_scale_ref_bs > 0 and args.batch_size != args.lr_scale_ref_bs:
+        lr_scale = math.sqrt(args.batch_size / args.lr_scale_ref_bs)
+        effective_lr = args.lr * lr_scale
+        print(f"[LR Scaling] base_lr={args.lr:.2e} x sqrt({args.batch_size}/{args.lr_scale_ref_bs})={lr_scale:.4f} => effective_lr={effective_lr:.2e}")
+
     optimizer_refiner = StableAdamW(
         [{'params': refiner_params}],
-        lr=args.lr,
+        lr=effective_lr,
         betas=(0.9, 0.999),
-        weight_decay=1e-4,
+        weight_decay=1e-3,  # increased from 1e-4 for regularization
         amsgrad=True,
         eps=1e-10
     )
     total_epochs = args.max_epoch
-    num_batches_per_epoch = len(normal_loader) + len(anomaly_loader)
-    total_iters_refiner = max(1, total_epochs * num_batches_per_epoch)
+    num_iters_per_epoch = min(len(normal_loader), len(anomaly_loader))
+    total_iters = max(1, total_epochs * num_iters_per_epoch)
     scheduler_refiner = WarmCosineScheduler(
         optimizer_refiner,
-        base_value=args.lr,
-        final_value=args.lr * 0.1,
-        total_iters=total_iters_refiner,
-        warmup_iters=min(100, max(0, total_iters_refiner - 1))
+        base_value=effective_lr,
+        final_value=effective_lr * 0.01,  # deeper decay: 1% instead of 10%
+        total_iters=total_iters,
+        warmup_iters=min(100, max(0, total_iters - 1))
     )
     optimizer_main = torch.optim.AdamW(
         [{'params': main_model_params}],
-        lr=args.lr
+        lr=effective_lr,
+        weight_decay=1e-3,  # added weight decay for regularization
     )
+    # === Improvement 2: Cosine scheduler per-step instead of per-epoch ===
     scheduler_main = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer_main,
-        T_max=args.max_epoch
+        T_max=total_iters,  # per-step instead of per-epoch
+        eta_min=effective_lr * 0.01,
     )
+
+    # === Improvement 6: EMA ===
+    ema = None
+    if args.ema_decay > 0:
+        ema = EMA(model, decay=args.ema_decay)
+        print(f"[EMA] Enabled with decay={args.ema_decay}")
 
     prompt_text = get_prompt_text(label_map)
     ap_best = float('-inf')
@@ -205,6 +255,7 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
         print("checkpoint info:")
         print("resume epoch:", start_epoch + 1, " ap:", ap_best)
 
+    no_improve_count = 0  # for early stopping
     for e in range(start_epoch, args.max_epoch):
         DNP_use = args.DNP_use
         model.train()
@@ -225,6 +276,16 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
             visual_features = torch.cat([normal_features, anomaly_features], dim=0).to(device)
             text_labels = list(normal_label) + list(anomaly_label)
             feat_lengths = torch.cat([normal_lengths, anomaly_lengths], dim=0).to(device)
+
+            # === Improvement 7: Feature-level data augmentation ===
+            if args.feat_dropout > 0:
+                feat_mask = torch.bernoulli(
+                    torch.full_like(visual_features, 1.0 - args.feat_dropout)
+                )
+                visual_features = visual_features * feat_mask / (1.0 - args.feat_dropout)
+            if args.feat_noise > 0:
+                noise = torch.randn_like(visual_features) * args.feat_noise
+                visual_features = visual_features + noise
 
 
 
@@ -309,11 +370,21 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
             optimizer_main.zero_grad()
             optimizer_refiner.zero_grad()
             loss.backward()
+            # === Improvement 3: Gradient clipping ===
+            if args.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
             optimizer_main.step()
             optimizer_refiner.step()
+            # === Improvement 2: Per-step schedulers (both) ===
+            scheduler_main.step()
             scheduler_refiner.step()
+            # === Improvement 6: EMA update ===
+            if ema is not None:
+                ema.update(model)
+
             step += i * normal_loader.batch_size * 2
-            if step % 1280 == 0 and step != 0:
+            # === Improvement 8: Configurable eval interval ===
+            if step % args.eval_interval == 0 and step != 0:
                 log_items = [
                     f"epoch: {e+1}",
                     f"step: {step}",
@@ -330,7 +401,13 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
 
                 print(" | ".join(log_items), flush=True)
                 sys.stdout.flush()
+
+                # Use EMA weights for evaluation if available
+                if ema is not None:
+                    ema.apply_shadow(model)
                 AUC, AP = test(model, testloader, args.visual_length, prompt_text, gt, gtsegments, gtlabels, DNP_use, device, args)
+                if ema is not None:
+                    ema.restore(model)
                 AP = AUC
 
                 model.train()
@@ -347,12 +424,16 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
                         'ap': ap_best}
                     torch.save(checkpoint, args.checkpoint_path)
 
-        scheduler_main.step()
-
+        # End-of-epoch evaluation
+        if ema is not None:
+            ema.apply_shadow(model)
         AUC, _ = test(
             model, testloader, args.visual_length, prompt_text, gt, gtsegments,
             gtlabels, DNP_use, device, args
         )
+        if ema is not None:
+            ema.restore(model)
+
         if AUC > ap_best:
             ap_best = AUC
             checkpoint = {
@@ -365,6 +446,14 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
                 'ap': ap_best,
             }
             torch.save(checkpoint, args.checkpoint_path)
+            no_improve_count = 0
+        else:
+            no_improve_count += 1
+
+        # === Improvement 5: Early stopping ===
+        if args.patience > 0 and no_improve_count >= args.patience:
+            print(f"[Early Stopping] No improvement for {args.patience} epochs. Stopping at epoch {e+1}.")
+            break
 
     if not os.path.exists(args.checkpoint_path):
         raise RuntimeError('Training finished without producing a checkpoint.')
