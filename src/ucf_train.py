@@ -353,6 +353,16 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
                 text_feature_abr = text_features[j] / text_features[j].norm(dim=-1, keepdim=True)
                 loss3 += torch.abs(text_feature_normal @ text_feature_abr)
             loss3 = loss3 / 13
+
+            # === IDEA 2: Temporal Smoothness Constraint ===
+            scores = torch.sigmoid(logits1.squeeze(-1))
+            smooth_loss = torch.zeros(1).to(device)
+            for b in range(scores.size(0)):
+                t_len = int(feat_lengths[b].item())
+                if t_len > 1:
+                    smooth_loss += torch.mean((scores[b, 1:t_len] - scores[b, 0:t_len-1])**2)
+            smooth_loss = smooth_loss / scores.size(0)
+
             if DNP_use == True:
                 loss = (
                     loss1
@@ -363,9 +373,10 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
                     + consistency_loss * args.loss_consistency_weight
                     + g_loss * args.loss_gather_weight
                     + dnp_normal_loss * args.loss_dnp_normal_weight
+                    + smooth_loss.squeeze() * getattr(args, 'temporal_smoothness_weight', 0.1)
                 )
             else:
-                loss = loss1 + loss2 + loss3 + loss4 + loss5
+                loss = loss1 + loss2 + loss3 + loss4 + loss5 + smooth_loss.squeeze() * getattr(args, 'temporal_smoothness_weight', 0.1)
 
             optimizer_main.zero_grad()
             optimizer_refiner.zero_grad()
@@ -398,6 +409,8 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
                     log_items.append(f"consistency_loss: {consistency_loss.item():.4f}")
                     log_items.append(f"g_loss: {g_loss.item():.4f}")
                     log_items.append(f"dnp_normal_loss: {dnp_normal_loss.item():.4f}")
+                
+                log_items.append(f"smooth_loss: {smooth_loss.item():.4f}")
 
                 print(" | ".join(log_items), flush=True)
                 sys.stdout.flush()

@@ -405,6 +405,14 @@ class DSANet(nn.Module):
         self.routing_rec_weight /= routing_weight_sum
         self.routing_sem_weight /= routing_weight_sum
 
+        # === IDEA 1: Adaptive Prompt Routing ===
+        self.adaptive_routing = getattr(args, 'adaptive_routing', False)
+        if self.adaptive_routing:
+            self.routing_net = nn.Sequential(
+                nn.Linear(embed_dim, 64),
+                nn.ReLU(),
+                nn.Linear(64, 3) # Xuất ra 3 trọng số cho det, rec, sem
+            )
         self.temporal = Transformer(
             width=visual_width,
             layers=visual_layers,
@@ -667,11 +675,25 @@ class DSANet(nn.Module):
                 ).unsqueeze(-1) / 2.0
                 reconstruction_score = reconstruction_score.clamp(0.0, 1.0)
                 detector_score = torch.sigmoid(logits1)
-                routing_prob = (
-                    self.routing_det_weight * detector_score
-                    + self.routing_rec_weight * reconstruction_score
-                    + self.routing_sem_weight * semantic_score
-                ).clamp(1e-5, 1.0 - 1e-5)
+                
+                # === IDEA 1: Adaptive Prompt Routing ===
+                if self.adaptive_routing:
+                    # Học ra 3 trọng số [B, T, 3] từ visual_features
+                    routing_weights = torch.softmax(self.routing_net(visual_features), dim=-1)
+                    w_det = routing_weights[..., 0:1]
+                    w_rec = routing_weights[..., 1:2]
+                    w_sem = routing_weights[..., 2:3]
+                    routing_prob = (
+                        w_det * detector_score
+                        + w_rec * reconstruction_score
+                        + w_sem * semantic_score
+                    ).clamp(1e-5, 1.0 - 1e-5)
+                else:
+                    routing_prob = (
+                        self.routing_det_weight * detector_score
+                        + self.routing_rec_weight * reconstruction_score
+                        + self.routing_sem_weight * semantic_score
+                    ).clamp(1e-5, 1.0 - 1e-5)
 
                 normal_text = category_text_norm[0].to(
                     dynamic_normal_patterns.dtype

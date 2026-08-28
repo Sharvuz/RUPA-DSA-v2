@@ -72,6 +72,8 @@ parser.add_argument('--loss-reconstructed-normal-weight', default=1.0, type=floa
 parser.add_argument('--loss-dnp-normal-weight', default=0.1, type=float)
 parser.add_argument('--loss-consistency-weight', default=1.0, type=float)
 parser.add_argument('--loss-gather-weight', default=1.0, type=float)
+parser.add_argument('--adaptive-routing', default=False, type=str2bool)
+parser.add_argument('--temporal-smoothness-weight', default=0.1, type=float)
 parser.add_argument('--num-workers', default=2, type=int)
 
 # === Improvement hyperparameters (v2.1) ===
