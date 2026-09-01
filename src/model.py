@@ -166,7 +166,9 @@ class SGNM(nn.Module):
         self.bottleneck = nn.Sequential(OrderedDict([
             ("c_fc", nn.Linear(feature_dim, feature_dim * 4)),
             ("gelu", QuickGELU()),
-            ("c_proj", nn.Linear(feature_dim * 4, feature_dim))
+            ("dropout1", nn.Dropout(p=0.5)),
+            ("c_proj", nn.Linear(feature_dim * 4, feature_dim)),
+            ("dropout2", nn.Dropout(p=0.5))
         ]))
 
         self.decoder = nn.ModuleList([
@@ -629,9 +631,10 @@ class DSANet(nn.Module):
         background_features = visual_features
         if DNP_use:
             reconstructed_features, dynamic_normal_patterns, g_loss = self.video_anomaly_refiner(
-                visual_features, logits1, lengths
+                visual_features.detach(), logits1.detach(), lengths
             )
-            residual_features = visual_features - reconstructed_features
+            residual_features = visual_features - reconstructed_features.detach()
+            residual_features = F.dropout(residual_features, p=0.3, training=self.training)
 
             DNP = {
                 'original_features': visual_features,
@@ -660,16 +663,19 @@ class DSANet(nn.Module):
                 semantic_score = 1.0 - F.softmax(semantic_logits, dim=-1)[:, :, :1]
                 reconstruction_score = (
                     1.0 - F.cosine_similarity(
-                        visual_features, reconstructed_features, dim=-1
+                        visual_features.detach(), reconstructed_features.detach(), dim=-1
                     )
                 ).unsqueeze(-1) / 2.0
                 reconstruction_score = reconstruction_score.clamp(0.0, 1.0)
-                detector_score = torch.sigmoid(logits1)
+                
+                temp = 2.0
+                detector_score = torch.sigmoid(logits1 / temp)
+                
                 routing_prob = (
                     self.routing_det_weight * detector_score
                     + self.routing_rec_weight * reconstruction_score
                     + self.routing_sem_weight * semantic_score
-                ).clamp(1e-5, 1.0 - 1e-5)
+                ).clamp(1e-4, 1.0 - 1e-4)
 
                 normal_text = category_text_norm[0].to(
                     dynamic_normal_patterns.dtype
