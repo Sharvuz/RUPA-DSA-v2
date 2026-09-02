@@ -331,7 +331,6 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
                 print(" | ".join(log_items), flush=True)
                 sys.stdout.flush()
                 AUC, AP = test(model, testloader, args.visual_length, prompt_text, gt, gtsegments, gtlabels, DNP_use, device, args)
-                AP = AUC
 
                 model.train()
 
@@ -349,12 +348,12 @@ def train(model, normal_loader, anomaly_loader, testloader, args, label_map, dev
 
         scheduler_main.step()
 
-        AUC, _ = test(
+        AUC, AP = test(
             model, testloader, args.visual_length, prompt_text, gt, gtsegments,
             gtlabels, DNP_use, device, args
         )
-        if AUC > ap_best:
-            ap_best = AUC
+        if AP > ap_best:
+            ap_best = AP
             checkpoint = {
                 'epoch': e,
                 'model_state_dict': model.state_dict(),
