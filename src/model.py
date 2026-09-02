@@ -148,7 +148,7 @@ class SGNM(nn.Module):
     def __init__(self, feature_dim=512, num_prototypes=64, num_heads=8,
                  extractor_depth=1, decoder_depth=8, normal_selection_ratio=0.125,
                  adaptive_normal_selection=True, min_normal_frames=4,
-                 max_normal_ratio=0.8):
+                 max_normal_ratio=0.8, dropout_rate=0.5):
         super().__init__()
 
         self.normal_selection_ratio = normal_selection_ratio
@@ -166,9 +166,9 @@ class SGNM(nn.Module):
         self.bottleneck = nn.Sequential(OrderedDict([
             ("c_fc", nn.Linear(feature_dim, feature_dim * 4)),
             ("gelu", QuickGELU()),
-            ("dropout1", nn.Dropout(p=0.5)),
+            ("dropout1", nn.Dropout(p=dropout_rate)),
             ("c_proj", nn.Linear(feature_dim * 4, feature_dim)),
-            ("dropout2", nn.Dropout(p=0.5))
+            ("dropout2", nn.Dropout(p=dropout_rate))
         ]))
 
         self.decoder = nn.ModuleList([
@@ -454,7 +454,11 @@ class DSANet(nn.Module):
             adaptive_normal_selection=getattr(args, 'adaptive_normal_selection', True),
             min_normal_frames=getattr(args, 'min_normal_frames', 4),
             max_normal_ratio=getattr(args, 'max_normal_ratio', 0.8),
+            dropout_rate=getattr(args, 'dropout_rate', 0.5),
         )
+
+        self.stop_gradient = getattr(args, 'stop_gradient', True)
+        self.residual_dropout = getattr(args, 'residual_dropout', 0.3)
 
         self._text_features_cache = None
 
@@ -630,11 +634,14 @@ class DSANet(nn.Module):
         event_features = visual_features
         background_features = visual_features
         if DNP_use:
+            v_feat = visual_features.detach() if self.stop_gradient else visual_features
+            l1_feat = logits1.detach() if self.stop_gradient else logits1
             reconstructed_features, dynamic_normal_patterns, g_loss = self.video_anomaly_refiner(
-                visual_features.detach(), logits1.detach(), lengths
+                v_feat, l1_feat, lengths
             )
-            residual_features = visual_features - reconstructed_features.detach()
-            residual_features = F.dropout(residual_features, p=0.3, training=self.training)
+            r_feat = reconstructed_features.detach() if self.stop_gradient else reconstructed_features
+            residual_features = visual_features - r_feat
+            residual_features = F.dropout(residual_features, p=self.residual_dropout, training=self.training)
 
             DNP = {
                 'original_features': visual_features,
@@ -663,7 +670,7 @@ class DSANet(nn.Module):
                 semantic_score = 1.0 - F.softmax(semantic_logits, dim=-1)[:, :, :1]
                 reconstruction_score = (
                     1.0 - F.cosine_similarity(
-                        visual_features.detach(), reconstructed_features.detach(), dim=-1
+                        v_feat, r_feat, dim=-1
                     )
                 ).unsqueeze(-1) / 2.0
                 reconstruction_score = reconstruction_score.clamp(0.0, 1.0)

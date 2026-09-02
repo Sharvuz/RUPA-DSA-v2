@@ -45,6 +45,14 @@ parser.add_argument('--decoder_depth', type=int, default=8)
 parser.add_argument('--normal_selection_ratio', type=float, default=0.8)
 parser.add_argument('--DNP_use', default=True, type=str2bool)
 
+# DNP Regularizations
+parser.add_argument('--dropout_rate', type=float, default=0.5,
+                    help='Dropout rate in SGNM bottleneck (0.5 for noisy datasets like XD, 0.0 for clean like UCF)')
+parser.add_argument('--residual_dropout', type=float, default=0.3,
+                    help='Dropout applied to the residual features')
+parser.add_argument('--stop_gradient', default=True, type=str2bool,
+                    help='Whether to stop gradient flow into main encoder from text alignment loss')
+
 # Adaptive Normal Selection (Improvement 2)
 parser.add_argument('--adaptive_normal_selection', default=True, type=str2bool,
                     help='Use Otsu thresholding for dynamic normal frame selection')
