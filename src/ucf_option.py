@@ -47,12 +47,16 @@ parser.add_argument('--num_prototypes', type=int, default=16)
 parser.add_argument('--DNP_use', default=True, type=str2bool)
 
 # DNP Regularizations
-parser.add_argument('--dropout_rate', type=float, default=0.5,
+parser.add_argument('--dropout_rate', type=float, default=0.0,
                     help='Dropout rate in SGNM bottleneck (0.5 for noisy datasets like XD, 0.0 for clean like UCF)')
-parser.add_argument('--residual_dropout', type=float, default=0.3,
+parser.add_argument('--residual_dropout', type=float, default=0.0,
                     help='Dropout applied to the residual features')
-parser.add_argument('--stop_gradient', default=True, type=str2bool,
+parser.add_argument('--stop_gradient', default=False, type=str2bool,
                     help='Whether to stop gradient flow into main encoder from text alignment loss')
+parser.add_argument('--routing_temp', type=float, default=1.0,
+                    help='Temperature scaling for detector scores in routing (1.0 for UCF)')
+parser.add_argument('--routing_clamp', type=float, default=1e-5,
+                    help='Clamp value for routing probability (1e-5 for UCF)')
 
 # Adaptive Normal Selection (Improvement 2)
 parser.add_argument('--adaptive_normal_selection', default=True, type=str2bool,

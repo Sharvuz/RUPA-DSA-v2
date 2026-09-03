@@ -675,14 +675,14 @@ class DSANet(nn.Module):
                 ).unsqueeze(-1) / 2.0
                 reconstruction_score = reconstruction_score.clamp(0.0, 1.0)
                 
-                temp = 2.0
+                temp = getattr(self.args, 'routing_temp', 1.0)
                 detector_score = torch.sigmoid(logits1 / temp)
                 
                 routing_prob = (
                     self.routing_det_weight * detector_score
                     + self.routing_rec_weight * reconstruction_score
                     + self.routing_sem_weight * semantic_score
-                ).clamp(1e-4, 1.0 - 1e-4)
+                ).clamp(getattr(self.args, 'routing_clamp', 1e-5), 1.0 - getattr(self.args, 'routing_clamp', 1e-5))
 
                 normal_text = category_text_norm[0].to(
                     dynamic_normal_patterns.dtype

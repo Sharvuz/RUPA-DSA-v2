@@ -52,6 +52,10 @@ parser.add_argument('--residual_dropout', type=float, default=0.3,
                     help='Dropout applied to the residual features')
 parser.add_argument('--stop_gradient', default=True, type=str2bool,
                     help='Whether to stop gradient flow into main encoder from text alignment loss')
+parser.add_argument('--routing_temp', type=float, default=2.0,
+                    help='Temperature scaling for detector scores in routing (e.g., 2.0 for XD)')
+parser.add_argument('--routing_clamp', type=float, default=1e-4,
+                    help='Clamp value for routing probability (e.g., 1e-4 for XD)')
 
 # Adaptive Normal Selection (Improvement 2)
 parser.add_argument('--adaptive_normal_selection', default=True, type=str2bool,
