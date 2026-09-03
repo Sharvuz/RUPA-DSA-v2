@@ -398,6 +398,8 @@ class DSANet(nn.Module):
         self.routing_det_weight = getattr(args, 'routing_det_weight', 0.5)
         self.routing_rec_weight = getattr(args, 'routing_rec_weight', 0.3)
         self.routing_sem_weight = getattr(args, 'routing_sem_weight', 0.2)
+        self.routing_temp = getattr(args, 'routing_temp', 1.0)
+        self.routing_clamp = getattr(args, 'routing_clamp', 1e-5)
         routing_weight_sum = (
             self.routing_det_weight + self.routing_rec_weight + self.routing_sem_weight
         )
@@ -675,14 +677,14 @@ class DSANet(nn.Module):
                 ).unsqueeze(-1) / 2.0
                 reconstruction_score = reconstruction_score.clamp(0.0, 1.0)
                 
-                temp = getattr(self.args, 'routing_temp', 1.0)
+                temp = self.routing_temp
                 detector_score = torch.sigmoid(logits1 / temp)
                 
                 routing_prob = (
                     self.routing_det_weight * detector_score
                     + self.routing_rec_weight * reconstruction_score
                     + self.routing_sem_weight * semantic_score
-                ).clamp(getattr(self.args, 'routing_clamp', 1e-5), 1.0 - getattr(self.args, 'routing_clamp', 1e-5))
+                ).clamp(self.routing_clamp, 1.0 - self.routing_clamp)
 
                 normal_text = category_text_norm[0].to(
                     dynamic_normal_patterns.dtype
