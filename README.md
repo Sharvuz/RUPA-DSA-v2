@@ -1,4 +1,4 @@
-# RUPA-DSA v2
+﻿# RUPA-DSA v2
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)
 ![PyTorch](https://img.shields.io/badge/PyTorch-1.10%2B-ee4c2c.svg)
