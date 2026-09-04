@@ -34,13 +34,13 @@ Dưới đây là kết quả huấn luyện tốt nhất được ghi nhận t�
 | **mAP@0.1** | **18.08%** | Đo độ chính xác tại top 10% các frame được dự đoán dị thường cao nhất (Top-tier predictions). |
 | **Average MAP** | **9.95%** | Trung bình Mean Average Precision ở nhiều ngưỡng IoU khác nhau. |
 
-> **Lưu ý:** Ở phiên bản v2 này, hiệu năng được tối ưu hóa cho cấu hình **Batch Size 32** kết hợp với cơ chế **EMA (Exponential Moving Average)** và **Linear LR Scaling** để đảm bảo quá trình hội tụ mượt mà và chống overfit sớm.
+> **Lưu ý:** Ở phiên bản v2 này, hiệu năng lập đỉnh tuyệt đối tại cấu hình **Batch Size 16**. Việc tăng Batch Size lên cao hơn (như 32) mà không có Warm-Start sẽ làm giảm độ sắc bén của Contrastive Loss, khiến AP bị tụt. Do đó, hãy giữ nguyên cấu hình BS 16.
 
 ---
 
 ## 🛠 Hướng dẫn huấn luyện (Training & Usage)
 
-Để tái lập lại đúng mức điểm số kỷ lục như trên (với cấu hình Batch Size 32), hãy sử dụng chính xác lệnh huấn luyện sau:
+Để tái lập lại đúng mức điểm số kỷ lục như trên (với cấu hình Batch Size 16), hãy sử dụng chính xác lệnh huấn luyện sau:
 
 ```bash
 python src/ucf_train.py \
@@ -49,7 +49,7 @@ python src/ucf_train.py \
   --model-path /kaggle/working/rupa_artifacts/ucf/best_ucf.pth \
   --checkpoint-path /kaggle/working/rupa_artifacts/ucf/checkpoint_ucf.pth \
   --max-epoch 10 \
-  --batch-size 32 \
+  --batch-size 16 \
   --num-workers 2 \
   --seed 234 \
   --rupa-use true \
@@ -60,16 +60,11 @@ python src/ucf_train.py \
   --loss-reconstructed-normal-weight 1.0 \
   --loss-dnp-normal-weight 0.1 \
   --loss-consistency-weight 1.0 \
-  --loss-gather-weight 1.0 \
-  --lr 1.4e-4 \
-  --ema_momentum 0.5 \
-  --scheduler-milestones 3 5 \
-  --scheduler-gamma 0.1
+  --loss-gather-weight 1.0
 ```
 
 ### Giải thích các tham số cực kỳ quan trọng (Hyperparameters):
-- `--batch-size 32`: Mở rộng Batch Size để lấy được Contrastive Loss tốt hơn.
-- `--lr 1.4e-4` & `--ema_momentum 0.5`: Cấu hình độc quyền của v2 (Linear Scaling Rule) đi kèm với cập nhật trung bình động (EMA) để giữ trọng số ổn định ở Batch Size lớn.
+- `--batch-size 16`: Cấu hình "điểm ngọt" (sweet spot) giúp Gradient cập nhật đủ nhạy bén để bắt được các dị thường tinh vi nhất ở ngay Epoch 1.
 - Các hệ số `--routing-*-weight`: Được điều chỉnh để pha trộn hoàn hảo điểm số từ **Base Detector (0.5)**, **Reconstruction (0.3)** và **Residual Semantics (0.2)**.
 
 ---
