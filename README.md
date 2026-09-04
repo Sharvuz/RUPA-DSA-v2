@@ -1,4 +1,4 @@
-﻿# RUPA-DSA v2
+# RUPA-DSA v2
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)
 ![PyTorch](https://img.shields.io/badge/PyTorch-1.10%2B-ee4c2c.svg)
@@ -20,6 +20,50 @@ Trong bài toán học yếu (weakly supervised), việc chọn nhầm khung hì
 
 3. **Residual Semantic Alignment:**
    Lấy đặc trưng gốc trừ đi đặc trưng bình thường vừa tái tạo để ra phần "thặng dư" (Residual). Phần thặng dư này chứa thông tin dị thường nguyên chất nhất và được đối chiếu trực tiếp với text prompt (CLIP) để phân loại.
+
+---
+
+## 📐 Sơ đồ Kiến trúc (Architecture Diagram)
+
+```mermaid
+flowchart TD
+    %% Inputs
+    V[Video] --> F[CLIP Vision Encoder]
+    F --> X[Video Features X]
+    
+    T["Text Prompts\n'Normal' / 'Abnormal'"] --> CLIP_T[CLIP Text Encoder]
+    CLIP_T --> T_Feat[Text Features]
+
+    %% Branch 1: Base Detector
+    X --> BaseDet[Base Anomaly Detector]
+    BaseDet --> S_det[Anomaly Scores S_det]
+    S_det --> L_MIL[Loss 1: MIL Classification]
+
+    %% Branch 2: Adaptive Selection & Reconstruction
+    S_det --> Otsu{"Adaptive Normal Selection\n(Otsu Thresholding)"}
+    X --> Otsu
+    Otsu -->|Selects| X_norm[Normal Frames X_norm]
+    
+    X_norm --> DNP[DNP Extractor]
+    DNP --> F_rec[Reconstructed Features F_rec]
+    F_rec --> L_Rec[Loss 5: Normal Reconstruction]
+    
+    %% Branch 3: Residual Semantics
+    X --> Sub(( - ))
+    F_rec --> Sub
+    Sub --> R[Residual Features R]
+    
+    R --> Align[Semantic Alignment with Text]
+    T_Feat --> Align
+    Align --> S_sem[Semantic Anomaly Scores S_sem]
+    S_sem --> L_Res[Loss 4: Residual Event]
+
+    %% Final Routing
+    S_det --> Router(("Closed-Loop\nRouting"))
+    F_rec --> Router
+    S_sem --> Router
+    Router --> S_final[Final Anomaly Scores]
+```
 
 ---
 
